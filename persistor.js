@@ -1,22 +1,31 @@
-function getStoragePersistor(config = {}) {
-  const {
-    key = 'storePersistor',
-    expireIn = Date.now() + (24 * 3600 * 1000)
-  } = config
-
+class StoreItem {
   /**
-   * @type {{
-      clear:()=>void,
-      getItem:(key:string)=>any,
-      removeItem: (key: string) => void,
-      subscribe: (observer: function) => void,
-      setItem: (key:string, value:any, expireIn?: number) => void
-   * }} */
-  let storagePersistor = null
+   * 
+   * @param {any} value 
+   * @param {number?} expireIn 
+   */
+  constructor(value, expireIn) {
+    this.value = value
+    this.expireIn = expireIn
+  }
 
-  const storeKey = btoa(key)
-  const observers = []
+  parseFromString(str) {
+    const { value, expireIn } = JSON.parse(str)
+
+    return new StoreItem(value, expireIn)
+  }
+}
+
+/** @param {{path?: string, expireIn?: number}} config */
+function getPersistentStorage(config) {
+  const {
+    path = 'storage',
+    expireIn
+  } = config ?? {}
+
+  /** @type {{expireIn: number, [key:string]: StoreItem}} */
   const store = { expireIn }
+  const observers = []
 
   const setStore = data => {
     Object.assign(store, data)
@@ -24,28 +33,23 @@ function getStoragePersistor(config = {}) {
 
   /** @param {string} key */
   const getItem = key => {
-    /** @type {{value: any, expireIn?: number}} */
+    
     const data = store[key]
 
     if (!data) return
 
     if (!data.expireIn) return data.value
 
-    if (data.expireIn <= Date.now()) return
+    if (data.expireIn <= Date.now()) return removeItem(key)
 
     return data.value
   }
 
-  /**
-   * @param {string} key 
-   * @param {any} value 
-   * @param {number} expireIn time to expire content, in minutes
-   */
-  const setItem = (key, value, expireIn = null) => {
-    const store = { [key]: { value } }
-
-    if (expireIn)
-      store[key].expireIn = Date.now() + expireIn * 60000
+  /** @param {string} key @param {any} value @param {number} expireIn time to expire content, in minutes */
+  const setItem = (key, value, expireIn) => {
+    const storeItem = new StoreItem(value, Date.now() + expireIn * 60000)
+    
+    const store = { [key]: storeItem }
 
     setStore(store)
 
@@ -56,6 +60,8 @@ function getStoragePersistor(config = {}) {
     for (const key of Object.keys(store)) delete store[key]
 
     updateStore()
+
+    localStorage.removeItem(path)
   }
 
   /** @param {string} key */
@@ -74,32 +80,33 @@ function getStoragePersistor(config = {}) {
 
   const updateStore = () => {
     const stringifiedStore = JSON.stringify(store)
-    const encryptedStore = btoa(stringifiedStore)
 
-    localStorage.setItem(storeKey, encryptedStore)
+    localStorage.setItem(path, stringifiedStore)
+
     notifyAll()
   }
 
-  const _init = () => {
-    if (!!storagePersistor) return storagePersistor
-    
+  const _init = () => {    
     try {
-      const encryptedStorePersisted = localStorage.getItem(storeKey)
+      const encryptedStorePersisted = localStorage.getItem(path)
 
+      const stringified = encryptedStorePersisted.toString()
+      
       /** @type {{expireIn: number, [name:string]: any}} */
-      const decryptedStore = atob(encryptedStorePersisted)
+      const parsedStore = stringified
+        ?JSON.parse(stringified)
+        :{expireIn}
 
-      if (decryptedStore.expireIn <= Date.now()) return
+      if (!parsedStore?.expireIn) {}
+      else if (parsedStore.expireIn <= Date.now()) throw Error('Store Expired')
 
-      setStore(decryptedStore)
+      setStore(parsedStore)
     } catch (error) {
-      console.log('store could not be loaded due to inconsistency to data, state was cleared')
-      console.trace(error)
+      console.log('store could not be loaded due to inconsistent data, state was cleared')
+      console.error(error)
     }
 
-    storagePersistor = { clear, getItem, removeItem, setItem, subscribe }
-
-    return storagePersistor
+    return { clear, getItem, removeItem, setItem, subscribe }
   }
 
   return _init()
